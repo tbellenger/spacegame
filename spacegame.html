@@ -1,0 +1,651 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <title>Spaceship Game</title>
+  <style>
+    canvas {
+      background: black;
+    }
+
+    body {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      height: 100vh;
+      margin: 0;
+      overflow: hidden;
+    }
+  </style>
+</head>
+
+<body>
+  <canvas id="gameCanvas" width="800" height="600"></canvas>
+
+  <script>
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+
+    // Constants
+    const CANVAS_WIDTH = canvas.width;
+    const CANVAS_HEIGHT = canvas.height;
+    const WORLD_WIDTH = 2000;
+    const WORLD_HEIGHT = 1600;
+    const SHIP_X = CANVAS_WIDTH / 2;
+    const SHIP_Y = CANVAS_HEIGHT / 2;
+    const DEG_TO_RAD = Math.PI / 180;
+    const HOT_PINK = '#FF69B4';
+    const INITIAL_POINTS = 100;
+    const PROJECTILE_COST = 2;
+    const TORPEDO_COST = 5;
+    const LASER_COST = 1;
+
+    // Sound Effects (replace URLs with your audio files)
+    const sounds = {
+      thruster: new Audio('thrusters.wav'), // Rocket thruster sound
+      bang: new Audio('shot.wav'),         // Projectile shot
+      whoosh: new Audio('bubble.wav'),     // Torpedo shot
+      laser: new Audio('laser.wav'),       // Laser shot
+      explosion: new Audio('explosion.wav') // Enemy explosion
+    };
+    sounds.thruster.loop = true; // Thruster sound loops while up arrow is held
+
+    class Spaceship {
+      constructor() {
+        this.reset();
+      }
+
+      reset() {
+        this.worldX = 0;
+        this.worldY = 0;
+        this.angle = 0;
+        this.velocityX = 0;
+        this.velocityY = 0;
+        this.maxSpeed = 5;
+        this.acceleration = 0.1;
+        this.rotationSpeed = 3;
+        this.width = 40;
+        this.height = 60;
+        this.shootCooldown = 0;
+        this.shootCooldownTime = 15;
+        this.torpedoCooldown = 0;
+        this.torpedoCooldownTime = 30;
+        this.laserCooldown = 0;
+        this.laserCooldownTime = 300;
+        this.enemiesDestroyed = 0;
+        this.hasTorpedoes = false;
+        this.hasLaser = false;
+        this.points = INITIAL_POINTS;
+      }
+
+      rotate(direction) {
+        this.angle += this.rotationSpeed * direction;
+      }
+
+      accelerate() {
+        const angleRad = this.angle * DEG_TO_RAD;
+        const sinAngle = Math.sin(angleRad);
+        const cosAngle = Math.cos(angleRad);
+        this.velocityX += sinAngle * this.acceleration;
+        this.velocityY -= cosAngle * this.acceleration;
+
+        const speed = Math.sqrt(this.velocityX * this.velocityX + this.velocityY * this.velocityY);
+        if (speed > this.maxSpeed) {
+          const scale = this.maxSpeed / speed;
+          this.velocityX *= scale;
+          this.velocityY *= scale;
+        }
+
+        this.spawnThrustParticles(angleRad, sinAngle, cosAngle);
+        if (!sounds.thruster.paused) return;
+        sounds.thruster.currentTime = 0;
+        sounds.thruster.play();
+      }
+
+      stopThruster() {
+        sounds.thruster.pause();
+        sounds.thruster.currentTime = 0;
+      }
+
+      shoot() {
+        if (this.shootCooldown <= 0 && this.points >= PROJECTILE_COST) {
+          const angleRad = this.angle * DEG_TO_RAD;
+          const noseX = this.worldX + Math.sin(angleRad) * (this.height / 2);
+          const noseY = this.worldY - Math.cos(angleRad) * (this.height / 2);
+          const speed = 5;
+          projectiles.push(new Projectile(noseX, noseY, this.velocityX + Math.sin(angleRad) * speed, this.velocityY - Math.cos(angleRad) * speed));
+          this.shootCooldown = this.shootCooldownTime;
+          this.points -= PROJECTILE_COST;
+          sounds.bang.currentTime = 0;
+          sounds.bang.play();
+        }
+      }
+
+      shootTorpedo() {
+        if (this.hasTorpedoes && this.torpedoCooldown <= 0 && this.points >= TORPEDO_COST) {
+          const angleRad = this.angle * DEG_TO_RAD;
+          const speed = 3;
+          const sinAngle = Math.sin(angleRad);
+          const cosAngle = Math.cos(angleRad);
+          const offset = this.width / 3;
+          const leftOffsetX = -cosAngle * offset;
+          const leftOffsetY = -sinAngle * offset;
+          const rightOffsetX = cosAngle * offset;
+          const rightOffsetY = sinAngle * offset;
+
+          projectiles.push(new Torpedo(this.worldX + leftOffsetX, this.worldY + leftOffsetY, this.velocityX + sinAngle * speed, this.velocityY - cosAngle * speed));
+          projectiles.push(new Torpedo(this.worldX + rightOffsetX, this.worldY + rightOffsetY, this.velocityX + sinAngle * speed, this.velocityY - cosAngle * speed));
+
+          this.torpedoCooldown = this.torpedoCooldownTime;
+          this.points -= TORPEDO_COST;
+          sounds.whoosh.currentTime = 0;
+          sounds.whoosh.play();
+          setTimeout(() => {
+            sounds.whoosh.currentTime = 0;
+            sounds.whoosh.play();
+          }, 50); // Slight delay for second torpedo sound
+        }
+      }
+
+      shootLaser() {
+        if (this.hasLaser && this.laserCooldown <= 0 && this.points >= LASER_COST) {
+          const angleRad = this.angle * DEG_TO_RAD;
+          const noseX = this.worldX + Math.sin(angleRad) * (this.height / 2);
+          const noseY = this.worldY - Math.cos(angleRad) * (this.height / 2);
+          const speed = 15;
+          projectiles.push(new Laser(noseX, noseY, this.velocityX + Math.sin(angleRad) * speed, this.velocityY - Math.cos(angleRad) * speed));
+          this.laserCooldown = this.laserCooldownTime;
+          this.points -= LASER_COST;
+          sounds.laser.currentTime = 0;
+          sounds.laser.play();
+        }
+      }
+
+      spawnThrustParticles(angleRad, sinAngle, cosAngle) {
+        const backOffsetX = -sinAngle * (this.height / 2);
+        const backOffsetY = cosAngle * (this.height / 2);
+        const spawnX = this.worldX + backOffsetX;
+        const spawnY = this.worldY + backOffsetY;
+        const thrustAngle = angleRad + Math.PI;
+
+        for (let i = 0; i < 3; i++) {
+          const spread = (Math.random() - 0.5) * 0.5;
+          const speed = 2 + Math.random();
+          const particle = particlePool.length ? particlePool.pop() : new Particle();
+          particle.init(spawnX, spawnY, Math.sin(thrustAngle + spread) * speed, -Math.cos(thrustAngle + spread) * speed, 'orange');
+          particles.push(particle);
+        }
+      }
+
+      update() {
+        if (this.shootCooldown > 0) this.shootCooldown--;
+        if (this.torpedoCooldown > 0) this.torpedoCooldown--;
+        if (this.laserCooldown > 0) this.laserCooldown--;
+        if (this.enemiesDestroyed >= 5 && !this.hasTorpedoes) {
+          this.hasTorpedoes = true;
+          this.width = 60;
+          this.height = 40;
+        }
+        if (this.enemiesDestroyed >= 10 && !this.hasLaser) {
+          this.hasLaser = true;
+        }
+      }
+
+      draw() {
+        ctx.save();
+        ctx.translate(SHIP_X, SHIP_Y);
+        ctx.rotate(this.angle * DEG_TO_RAD);
+
+        if (!this.hasTorpedoes) {
+          ctx.beginPath();
+          ctx.moveTo(0, -this.height / 2);
+          ctx.lineTo(-this.width / 2, this.height / 2);
+          ctx.lineTo(this.width / 2, this.height / 2);
+          ctx.closePath();
+          ctx.fillStyle = 'white';
+          ctx.fill();
+        } else {
+          ctx.beginPath();
+          ctx.moveTo(0, -this.height / 2);
+          ctx.lineTo(-this.width / 4, this.height / 2);
+          ctx.lineTo(this.width / 4, this.height / 2);
+          ctx.closePath();
+          ctx.fillStyle = (this.hasLaser && this.laserCooldown === 0) ? 'yellow' : 'white';
+          ctx.fill();
+
+          ctx.beginPath();
+          ctx.moveTo(-this.width / 4, 0);
+          ctx.lineTo(-this.width / 2, this.height / 4);
+          ctx.lineTo(-this.width / 4, this.height / 2);
+          ctx.fillStyle = 'gray';
+          ctx.fill();
+
+          ctx.beginPath();
+          ctx.moveTo(this.width / 4, 0);
+          ctx.lineTo(this.width / 2, this.height / 4);
+          ctx.lineTo(this.width / 4, this.height / 2);
+          ctx.fillStyle = 'gray';
+          ctx.fill();
+
+          if (this.torpedoCooldown === 0) {
+            ctx.fillStyle = 'blue';
+            ctx.fillRect(-this.width / 2 + 5, this.height / 4 - 3, 10, 6);
+            ctx.fillRect(this.width / 2 - 15, this.height / 4 - 3, 10, 6);
+          }
+        }
+
+        ctx.restore();
+      }
+
+      getMovement() {
+        return { dx: this.velocityX, dy: this.velocityY };
+      }
+    }
+
+    class Enemy {
+      constructor() {
+        this.width = 30;
+        this.height = 45;
+        this.respawn();
+      }
+
+      respawn() {
+        const side = Math.floor(Math.random() * 4);
+        switch (side) {
+          case 0: this.worldX = Math.random() * WORLD_WIDTH - WORLD_WIDTH / 2; this.worldY = -WORLD_HEIGHT / 2 - 50; break;
+          case 1: this.worldX = WORLD_WIDTH / 2 + 50; this.worldY = Math.random() * WORLD_HEIGHT - WORLD_HEIGHT / 2; break;
+          case 2: this.worldX = Math.random() * WORLD_WIDTH - WORLD_WIDTH / 2; this.worldY = WORLD_HEIGHT / 2 + 50; break;
+          case 3: this.worldX = -WORLD_WIDTH / 2 - 50; this.worldY = Math.random() * WORLD_HEIGHT - WORLD_HEIGHT / 2; break;
+        }
+        this.angle = Math.random() * 360;
+      }
+
+      move(dx, dy) {
+        this.worldX -= dx;
+        this.worldY -= dy;
+
+        if (this.worldX < -WORLD_WIDTH / 2 - 50 || this.worldX > WORLD_WIDTH / 2 + 50 ||
+          this.worldY < -WORLD_HEIGHT / 2 - 50 || this.worldY > WORLD_HEIGHT / 2 + 50) {
+          this.respawn();
+        }
+      }
+
+      draw() {
+        ctx.save();
+        ctx.translate(SHIP_X + this.worldX, SHIP_Y + this.worldY);
+        ctx.rotate(this.angle * DEG_TO_RAD);
+        ctx.beginPath();
+        ctx.moveTo(0, -this.height / 2);
+        ctx.lineTo(-this.width / 2, this.height / 2);
+        ctx.lineTo(this.width / 2, this.height / 2);
+        ctx.closePath();
+        ctx.fillStyle = 'red';
+        ctx.fill();
+        ctx.restore();
+      }
+
+      disintegrate() {
+        for (let i = 0; i < 15; i++) {
+          const angle = Math.random() * Math.PI * 2;
+          const speed = Math.random() * 3 + 1;
+          const particle = particlePool.length ? particlePool.pop() : new Particle();
+          particle.init(this.worldX, this.worldY, Math.cos(angle) * speed, Math.sin(angle) * speed, 'red', 15);
+          particles.push(particle);
+        }
+        this.respawn();
+        ship.enemiesDestroyed++;
+        score += 5;
+        sounds.explosion.currentTime = 0;
+        sounds.explosion.play();
+      }
+
+      checkCollision(projectile) {
+        const dx = this.worldX - projectile.worldX;
+        const dy = this.worldY - projectile.worldY;
+        return Math.sqrt(dx * dx + dy * dy) < (Math.max(this.width, this.height) / 2 + Math.max(projectile.size || 3, projectile.width || 0));
+      }
+    }
+
+    class Star {
+      constructor() {
+        this.worldX = Math.random() * WORLD_WIDTH - WORLD_WIDTH / 2;
+        this.worldY = Math.random() * WORLD_HEIGHT - WORLD_HEIGHT / 2;
+        this.size = Math.random() * 2 + 1;
+      }
+
+      move(dx, dy) {
+        this.worldX -= dx;
+        this.worldY -= dy;
+        if (this.worldX < -WORLD_WIDTH / 2 || this.worldX > WORLD_WIDTH / 2 ||
+          this.worldY < -WORLD_HEIGHT / 2 || this.worldY > WORLD_HEIGHT / 2) {
+          this.respawnOutsideViewport();
+        }
+      }
+
+      respawnOutsideViewport() {
+        const viewportLeft = -CANVAS_WIDTH / 2;
+        const viewportRight = CANVAS_WIDTH / 2;
+        const viewportTop = -CANVAS_HEIGHT / 2;
+        const viewportBottom = CANVAS_HEIGHT / 2;
+        const side = Math.floor(Math.random() * 4);
+        switch (side) {
+          case 0: this.worldX = Math.random() * WORLD_WIDTH - WORLD_WIDTH / 2; this.worldY = Math.random() * (viewportTop - (-WORLD_HEIGHT / 2)) + (-WORLD_HEIGHT / 2); break;
+          case 1: this.worldX = Math.random() * (WORLD_WIDTH / 2 - viewportRight) + viewportRight; this.worldY = Math.random() * WORLD_HEIGHT - WORLD_HEIGHT / 2; break;
+          case 2: this.worldX = Math.random() * WORLD_WIDTH - WORLD_WIDTH / 2; this.worldY = Math.random() * (WORLD_HEIGHT / 2 - viewportBottom) + viewportBottom; break;
+          case 3: this.worldX = Math.random() * (viewportLeft - (-WORLD_WIDTH / 2)) + (-WORLD_WIDTH / 2); this.worldY = Math.random() * WORLD_HEIGHT - WORLD_HEIGHT / 2; break;
+        }
+      }
+
+      draw() {
+        ctx.beginPath();
+        ctx.arc(SHIP_X + this.worldX, SHIP_Y + this.worldY, this.size, 0, Math.PI * 2);
+        ctx.fillStyle = 'white';
+        ctx.fill();
+      }
+    }
+
+    class Projectile {
+      constructor(worldX, worldY, dx, dy) {
+        this.worldX = worldX;
+        this.worldY = worldY;
+        this.dx = dx;
+        this.dy = dy;
+        this.size = 3;
+        this.lifetime = 60;
+      }
+
+      update() {
+        this.worldX += this.dx;
+        this.worldY += this.dy;
+        this.lifetime--;
+      }
+
+      draw() {
+        ctx.beginPath();
+        ctx.arc(SHIP_X + this.worldX, SHIP_Y + this.worldY, this.size, 0, Math.PI * 2);
+        ctx.fillStyle = 'white';
+        ctx.fill();
+      }
+
+      isExpired() {
+        return this.lifetime <= 0;
+      }
+    }
+
+    class Torpedo extends Projectile {
+      constructor(worldX, worldY, dx, dy) {
+        super(worldX, worldY, dx, dy);
+        this.width = 20;
+        this.height = 6;
+        this.lifetime = 120;
+        this.angle = Math.atan2(dy, dx);
+      }
+
+      draw() {
+        ctx.save();
+        ctx.translate(SHIP_X + this.worldX, SHIP_Y + this.worldY);
+        ctx.rotate(this.angle);
+        ctx.beginPath();
+        ctx.rect(-this.width / 2, -this.height / 2, this.width, this.height);
+        ctx.fillStyle = 'blue';
+        ctx.fill();
+        ctx.restore();
+      }
+    }
+
+    class Laser extends Projectile {
+      constructor(worldX, worldY, dx, dy) {
+        super(worldX, worldY, dx, dy);
+        this.width = 60;
+        this.height = 2;
+        this.lifetime = 120;
+        this.angle = Math.atan2(dy, dx);
+      }
+
+      draw() {
+        ctx.save();
+        ctx.translate(SHIP_X + this.worldX, SHIP_Y + this.worldY);
+        ctx.rotate(this.angle);
+        ctx.beginPath();
+        ctx.rect(-this.width / 2, -this.height / 2, this.width, this.height);
+        ctx.fillStyle = 'yellow';
+        ctx.fill();
+        ctx.restore();
+      }
+    }
+
+    class Particle {
+      constructor() {
+        this.init(0, 0, 0, 0, 'white');
+      }
+
+      init(worldX, worldY, dx, dy, color, lifetime = Math.random() * 20 + 10) {
+        this.worldX = worldX;
+        this.worldY = worldY;
+        this.dx = dx;
+        this.dy = dy;
+        this.size = Math.random() * 3 + 1;
+        this.lifetime = lifetime;
+        this.color = color;
+      }
+
+      update() {
+        this.worldX += this.dx;
+        this.worldY += this.dy;
+        this.lifetime--;
+        this.size *= 0.95;
+      }
+
+      draw() {
+        ctx.beginPath();
+        ctx.arc(SHIP_X + this.worldX, SHIP_Y + this.worldY, this.size, 0, Math.PI * 2);
+        ctx.fillStyle = this.color;
+        ctx.fill();
+      }
+
+      isExpired() {
+        return this.lifetime <= 0;
+      }
+    }
+
+    class Radar {
+      constructor() {
+        this.x = CANVAS_WIDTH - 120;
+        this.y = 60;
+        this.width = 100;
+        this.height = 80;
+        this.visible = false;
+      }
+
+      toggle() {
+        this.visible = !this.visible;
+      }
+
+      draw(player, enemies) {
+        if (!this.visible) return;
+
+        ctx.strokeStyle = 'green';
+        ctx.lineWidth = 2;
+        ctx.strokeRect(this.x, this.y, this.width, this.height);
+
+        const centerX = this.x + this.width / 2;
+        const centerY = this.y + this.height / 2;
+        ctx.beginPath();
+        ctx.arc(centerX, centerY, 3, 0, Math.PI * 2);
+        ctx.fillStyle = 'white';
+        ctx.fill();
+
+        const scaleX = this.width / WORLD_WIDTH;
+        const scaleY = this.height / WORLD_HEIGHT;
+
+        for (const enemy of enemies) {
+          const radarX = centerX + enemy.worldX * scaleX;
+          const radarY = centerY + enemy.worldY * scaleY;
+
+          if (radarX >= this.x && radarX <= this.x + this.width &&
+            radarY >= this.y && radarY <= this.y + this.height) {
+            ctx.beginPath();
+            ctx.arc(radarX, radarY, 2, 0, Math.PI * 2);
+            ctx.fillStyle = 'red';
+            ctx.fill();
+          }
+        }
+      }
+    }
+
+    // Game setup
+    const ship = new Spaceship();
+    let stars = Array(200).fill().map(() => new Star());
+    let projectiles = [];
+    let particles = [];
+    let particlePool = [];
+    let enemies = Array(5).fill().map(() => new Enemy());
+    const radar = new Radar();
+    let score = 0;
+    let gameOver = false;
+
+    // Keyboard controls
+    const keys = {
+      left: false,
+      right: false,
+      up: false,
+      down: false,
+      space: false,
+      r: false,
+      t: false,
+      s: false,
+      l: false
+    };
+
+    document.addEventListener('keydown', (e) => {
+      switch (e.key) {
+        case 'ArrowLeft': keys.left = true; break;
+        case 'ArrowRight': keys.right = true; break;
+        case 'ArrowUp': keys.up = true; break;
+        case 'ArrowDown': keys.down = true; break;
+        case ' ': keys.space = true; break;
+        case 'r': if (!keys.r) radar.toggle(); keys.r = true; break;
+        case 't': keys.t = true; break;
+        case 's': if (!keys.s) restartGame(); keys.s = true; break;
+        case 'l': keys.l = true; break;
+      }
+    });
+
+    document.addEventListener('keyup', (e) => {
+      switch (e.key) {
+        case 'ArrowLeft': keys.left = false; break;
+        case 'ArrowRight': keys.right = false; break;
+        case 'ArrowUp': keys.up = false; ship.stopThruster(); break;
+        case 'ArrowDown': keys.down = false; break;
+        case ' ': keys.space = false; break;
+        case 'r': keys.r = false; break;
+        case 't': keys.t = false; break;
+        case 's': keys.s = false; break;
+        case 'l': keys.l = false; break;
+      }
+    });
+
+    function restartGame() {
+      ship.reset();
+      stars = Array(200).fill().map(() => new Star());
+      projectiles.length = 0;
+      particles.forEach(p => particlePool.push(p));
+      particles.length = 0;
+      enemies = Array(5).fill().map(() => new Enemy());
+      radar.visible = false;
+      score = 0;
+      gameOver = false;
+    }
+
+    function updateGame(movement) {
+      if (keys.left) ship.rotate(-1);
+      if (keys.right) ship.rotate(1);
+      if (keys.up) ship.accelerate();
+      if (keys.down) {
+        const speed = Math.sqrt(ship.velocityX * ship.velocityX + ship.velocityY * ship.velocityY);
+        if (speed > 0) {
+          const angle = Math.atan2(ship.velocityX, -ship.velocityY);
+          ship.velocityX -= Math.sin(angle) * ship.acceleration;
+          ship.velocityY += Math.cos(angle) * ship.acceleration;
+          ship.spawnThrustParticles(angle, Math.sin(angle), Math.cos(angle));
+        }
+      }
+      if (keys.space) ship.shoot();
+      if (keys.t) ship.shootTorpedo();
+      if (keys.l) ship.shootLaser();
+
+      ship.update();
+
+      for (let i = projectiles.length - 1; i >= 0; i--) {
+        const projectile = projectiles[i];
+        projectile.update();
+
+        let hit = false;
+        for (let j = enemies.length - 1; j >= 0; j--) {
+          if (enemies[j].checkCollision(projectile)) {
+            enemies[j].disintegrate();
+            projectiles.splice(i, 1);
+            hit = true;
+            break;
+          }
+        }
+
+        if (!hit && projectile.isExpired()) {
+          projectiles.splice(i, 1);
+        }
+      }
+
+      for (let i = particles.length - 1; i >= 0; i--) {
+        const particle = particles[i];
+        particle.update();
+        if (particle.isExpired()) {
+          particlePool.push(particles.splice(i, 1)[0]);
+        }
+      }
+
+      enemies.forEach(enemy => enemy.move(movement.dx, movement.dy));
+      stars.forEach(star => star.move(movement.dx, movement.dy));
+
+      gameOver = ship.points <= 0;
+    }
+
+    function drawGame() {
+      ctx.fillStyle = 'black';
+      ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+
+      stars.forEach(star => star.draw());
+      enemies.forEach(enemy => enemy.draw());
+      particles.forEach(particle => particle.draw());
+      projectiles.forEach(projectile => projectile.draw());
+      ship.draw();
+
+      radar.draw(ship, enemies);
+
+      ctx.fillStyle = 'white';
+      ctx.font = '20px Arial';
+      ctx.textAlign = 'left';
+      ctx.fillText(`Score: ${score}`, 10, 30);
+      ctx.fillText(`Points: ${ship.points}`, 10, 60);
+
+      if (gameOver) {
+        ctx.fillStyle = HOT_PINK;
+        ctx.font = '48px Arial';
+        ctx.textAlign = 'center';
+        ctx.fillText('GAME OVER', CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2);
+        ctx.font = '24px Arial';
+        ctx.fillText('Press \'s\' to play again', CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2 + 40);
+      }
+    }
+
+    function gameLoop() {
+      const movement = ship.getMovement();
+      if (!gameOver) updateGame(movement);
+      drawGame();
+      requestAnimationFrame(gameLoop);
+    }
+
+    gameLoop();
+  </script>
+</body>
+
+</html>
